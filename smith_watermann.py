@@ -1,0 +1,79 @@
+from concurrent.futures import ThreadPoolExecutor
+from time import perf_counter
+
+def compute_submatrix(args):
+    i_range, sequence1, sequence2, match_score, mismatch_score, gap_penalty, score_matrix, traceback_matrix = args
+    for i in i_range:
+        for j in range(1, len(sequence2) + 1):
+            match = score_matrix[i - 1][j - 1] + (match_score if sequence1[i - 1] == sequence2[j - 1] else mismatch_score)
+            delete = score_matrix[i - 1][j] + gap_penalty
+            insert = score_matrix[i][j - 1] + gap_penalty
+
+            if match >= delete and match >= insert and match > 0:
+                score_matrix[i][j] = match
+                traceback_matrix[i][j] = 1  # Match
+            elif delete >= match and delete >= insert and delete > 0:
+                score_matrix[i][j] = delete
+                traceback_matrix[i][j] = 2  # Delete
+            elif insert >= match and insert >= delete and insert > 0:
+                score_matrix[i][j] = insert
+                traceback_matrix[i][j] = 3  # Insert
+            else:
+                score_matrix[i][j] = 0
+                traceback_matrix[i][j] = 0
+
+def smith_waterman_parallel(sequence1, sequence2, match_score=2, mismatch_score=-1, gap_penalty=-2):
+    m = len(sequence1)
+    n = len(sequence2)
+
+    score_matrix = [[0] * (n + 1) for _ in range(m + 1)]
+    traceback_matrix = [[0] * (n + 1) for _ in range(m + 1)]
+
+    num_threads = 4
+
+    with ThreadPoolExecutor(max_workers=num_threads) as executor:
+        # Divide the rows among the threads
+        rows_per_thread = m // num_threads
+        args_list = [(range(start, start + rows_per_thread), sequence1, sequence2, match_score, mismatch_score, gap_penalty, score_matrix, traceback_matrix)
+                     for start in range(1, m + 1, rows_per_thread)]
+
+        futures = [executor.submit(compute_submatrix, args) for args in args_list]
+
+        # Wait for all tasks to complete
+        for future in futures:
+            future.result()
+
+    # Find the position of the maximum score in the matrix
+    max_score = 0
+    max_position = (0, 0)
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            if score_matrix[i][j] > max_score:
+                max_score = score_matrix[i][j]
+                max_position = (i, j)
+
+    # Traceback to find the optimal local alignment
+    alignment1 = ""
+    alignment2 = ""
+    i, j = max_position
+    while i > 0 and j > 0 and score_matrix[i][j] > 0:
+        if traceback_matrix[i][j] == 1:  # Match
+            alignment1 = sequence1[i - 1] + alignment1
+            alignment2 = sequence2[j - 1] + alignment2
+            i -= 1
+            j -= 1
+        elif traceback_matrix[i][j] == 2:  # Delete
+            alignment1 = sequence1[i - 1] + alignment1
+            alignment2 = '-' + alignment2
+            i -= 1
+        elif traceback_matrix[i][j] == 3:  # Insert
+            alignment1 = '-' + alignment1
+            alignment2 = sequence2[j - 1] + alignment2
+            
+    return alignment1, alignment2, max_score
+
+# Example usage
+sequence1 = "AGTACGCA"
+sequence2 = "TATGC"
+
+alignment1, alignment2, max_score = smith_waterman_parallel(sequence1, sequence2)
